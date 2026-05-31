@@ -1,6 +1,5 @@
-//! Smoke tests for `egui_workbench`. Mirrors the kittest pattern used
-//! in hiker's `app/src/smoke_tests.rs`: build a workbench, drive it for
-//! a few frames in a headless harness, assert no panic.
+//! Smoke tests for `egui_workbench`. Build a workbench, drive it for
+//! a few frames in a headless kittest harness, assert no panic.
 
 use egui_workbench::tab::Document;
 

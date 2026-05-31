@@ -1,9 +1,6 @@
-//! Generic feature-registry foundation. Consumers (hiker-app, hiker-lite,
-//! future apps built on `egui_workbench`) supply their own `Ctx` impl;
-//! features parameterize on a `Ctx`-trait bound so they can be shared
-//! across apps without coupling to either one's `AppState`.
-//!
-//! See `docs/feature-registry.md` (in the hiker repo) for the design.
+//! Generic feature-registry foundation. Consumer apps supply their own
+//! `Ctx` impl; features parameterize on a `Ctx`-trait bound so they can
+//! be shared across apps without coupling to any one app's state.
 //!
 //! ## Quick map
 //!
@@ -25,10 +22,10 @@ use std::sync::Arc;
 
 /// The minimum contract every consumer app's per-surface Ctx impl
 /// satisfies. Features see callers as `&mut C` where `C: Ctx + ?Sized`
-/// (often `C = dyn HikerCtx` for hiker-app, `C = dyn LiteCtx` for
-/// hiker-lite). The only universal method is the per-feature opaque
-/// state slot; every other accessor lives on a per-feature
-/// *requirement trait* the app's umbrella Ctx supertraits.
+/// (often a `dyn AppCtx` trait object the app defines). The only
+/// universal method is the per-feature opaque state slot; every other
+/// accessor lives on a per-feature *requirement trait* the app's
+/// umbrella Ctx supertraits.
 ///
 /// Why `state()` is on the universal trait: the registry's host needs
 /// to thread a per-feature state slice into the call regardless of
@@ -51,12 +48,11 @@ pub trait Ctx {
 /// what it wants. Generic over `C: Ctx + ?Sized` so:
 ///
 /// - Features owned by one app bind a concrete app-umbrella Ctx
-///   (`Feature<dyn HikerCtx>`).
-/// - Features in `hiker-features/` (shared) impl
-///   `Feature<C>` for `C: FooCtx + ?Sized` where `FooCtx` is the
-///   feature's own Ctx requirement trait. Both apps' umbrella Ctx
-///   types supertrait `FooCtx`, so the same `Arc<Foo>` works in
-///   either app's registry.
+///   (`Feature<dyn AppCtx>`).
+/// - Shared features impl `Feature<C>` for `C: FooCtx + ?Sized` where
+///   `FooCtx` is the feature's own Ctx requirement trait. Each app's
+///   umbrella Ctx type supertraits `FooCtx`, so the same `Arc<Foo>`
+///   works in any app's registry.
 pub trait Feature<C: Ctx + ?Sized + 'static>: Send + Sync {
     /// Stable kebab-case id (e.g. `"clusters"`). Used as the dispatch
     /// key from the registry + persisted in settings.

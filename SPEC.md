@@ -83,7 +83,7 @@ arrangement is persistable per workspace.
 
 2.10. The bar can be **collapsed** entirely with a keyboard shortcut (`Ctrl+B` / `Cmd+B` by default) — the section set is preserved, only visibility changes.
 
-2.11. The bar's width is **persisted** across sessions. The host may also persist the section arrangement (open sections, collapse flags, height weights, focus, visibility) via the `SidePanelStack` accessors + `restore` — hiker does so per-vault in `.hiker/side-panel.json`.
+2.11. The bar's width is **persisted** across sessions. The host may also persist the section arrangement (open sections, collapse flags, height weights, focus, visibility) via the `SidePanelStack` accessors + `restore`, storing it wherever it keeps its own per-workspace settings.
 
 2.12. The bar's position can be **swapped** to the right edge — content unchanged, just rendered on the other side.
 
@@ -255,7 +255,6 @@ arrangement is persistable per workspace.
 
 ## Success criteria for v0.1.0 release
 
-- Hiker integrates with all visible UX matching or exceeding current setup.
-- API stays generic: nothing in the crate references hiker types, hiker domain concepts, or hiker-specific layout choices. Other egui apps could adopt it (possibly with future extension points) without forking.
+- API stays generic: nothing in the crate references a host app's types, domain concepts, or app-specific layout choices. Any egui app can adopt it (possibly with future extension points) without forking.
 - `cargo test` green, `cargo clippy` clean with the workspace lint set, `cargo doc` warning-free.
 - Demo binary `cargo run -p workbench-demo` launches and lets the user reproduce every requirement above.

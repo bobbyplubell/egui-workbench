@@ -435,7 +435,7 @@ cargo run -p workbench-demo
 ### Smoke tests (kittest)
 
 - Build a `Workbench` with default layout, run 3 frames in a kittest
-  Harness, assert no panic. **Mirrors the smoke test in hiker.**
+  Harness, assert no panic.
 - Build a workbench, simulate a tab close via `workbench.close_tab`,
   run a frame, assert tab is gone.
 - Build a workbench, simulate splitting, run frames, assert focus
@@ -477,17 +477,15 @@ soften this — adding a new method is backwards compatible.
 Layout schema (`WorkbenchLayout`) bumps independently. v1 stays
 forever; v2 adds new fields with defaults. Migration code never deletes.
 
-## Out-of-tree integration story (for hiker)
+## Out-of-tree integration story
 
-Once egui_workbench is functional, hiker migrates:
+A host app integrates `egui_workbench` by:
 
-1. Replace `app/src/layout.rs` + `app/src/tabs.rs` + `app/src/panels_registry.rs` with calls into `egui_workbench`.
-2. Hiker's `DockTab` enum becomes hiker's `Tab` type — `impl DocumentTab for DockTab`.
-3. Hiker's activity items: Files / Clusters / Trails / Search / Related / Backlinks / Chat — each becomes an `ActivityItem<HikerMode>`.
-4. Hiker's `actions.rs` panel toggles call `workbench.toggle_primary_side_bar()`, etc.
-5. Layout persistence: hiker calls `workbench.layout()` for the dock state and stores it in `.hiker/layout.json` (replacing our current schema).
-
-Estimated migration: ~3 days once egui_workbench v0.1.0 is solid.
+1. Replacing its own layout / tab / panel-registry modules with calls into `egui_workbench`.
+2. Making its tab enum the `Tab` type — `impl DocumentTab for AppTab`.
+3. Mapping each of its activities (file tree, search, etc.) to an `ActivityItem<AppMode>`.
+4. Routing its panel toggles through `workbench.toggle_primary_side_bar()`, etc.
+5. Persisting layout: call `workbench.layout()` for the dock state and store it wherever the app keeps per-workspace settings.
 
 ## Implementation phases
 

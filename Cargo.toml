@@ -1,11 +1,37 @@
+[workspace]
+resolver = "2"
+members = ["examples/workbench-demo"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.85"
+repository = "https://github.com/bobbyplubell/egui-workbench"
+
+[workspace.dependencies]
+egui_workbench = { path = "." }
+egui = "0.32"
+egui_extras = { version = "0.32", features = ["svg", "image"] }
+egui_tiles = { version = "0.13", features = ["serde"] }
+eframe = { version = "0.32", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui_kittest = { version = "0.32", features = ["snapshot", "wgpu"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+
+[workspace.lints.clippy]
+too_many_lines = "deny"
+
 [package]
 name = "egui_workbench"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
 description = "A configurable IDE-style workbench layout for egui — activity bar, dockable side panels, tabbed editor groups, bottom panel area, status bar. Built on egui_tiles."
-repository = "https://github.com/anthropics/hiker"
 keywords = ["egui", "gui", "workbench", "layout", "ide"]
 categories = ["gui"]
 
