@@ -52,10 +52,10 @@
 // Crate is in scaffolding stage; allow incomplete modules during build-out.
 #![allow(dead_code)]
 
+pub mod activity;
 pub mod activity_bar;
 pub mod behavior;
 pub mod editor_area;
-pub mod feature;
 pub mod panel_area;
 #[cfg(feature = "serde")]
 pub mod persistence;

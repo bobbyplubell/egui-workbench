@@ -14,7 +14,7 @@ use crate::activity_bar::ActivityBar;
 use crate::behavior::Host;
 use crate::editor_area::EditorArea;
 use crate::panel_area::PanelArea;
-use crate::side_bar::{SideBar, SideBarRole, Side, show_side_bar};
+use crate::side_bar::{SideBar, Side};
 use crate::tab::{Document, State};
 
 /// Stable identifier for a tab payload inside a [`Workbench`].
@@ -126,6 +126,11 @@ pub struct Workbench<Tab: Document, Mode: Clone + Eq + Hash + 'static> {
     /// sections here; headers drag to reorder. [feature-multi-region-sidebar]
     pub primary_panels: crate::side_panel_stack::SidePanelStack<Mode>,
     pub secondary_side_bar: SideBar,
+    /// Secondary (right) side-panel region — the symmetric counterpart of
+    /// [`Self::primary_panels`]. Right-bar activities (e.g. chat) dock
+    /// here; rendered through the SAME generic `Host::side_bar_ui(mode)`
+    /// path as the primary stack. [feature-multi-region-sidebar]
+    pub secondary_panels: crate::side_panel_stack::SidePanelStack<Mode>,
     pub editor_area: EditorArea<Tab>,
     pub panel_area: PanelArea<Tab>,
     pub status_bar: StatusBar,
@@ -138,15 +143,23 @@ pub struct Workbench<Tab: Document, Mode: Clone + Eq + Hash + 'static> {
 
 impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Default for Workbench<Tab, Mode> {
     fn default() -> Self {
+        // Distinct cross-stack drag tags so a section dragged between the
+        // two stacks is recognised as a cross-stack move (vs. a within-stack
+        // reorder). [feature-multi-region-sidebar]
+        let mut primary_panels = crate::side_panel_stack::SidePanelStack::new();
+        primary_panels.set_location_tag(LEFT_STACK_TAG);
+        let mut secondary_panels = crate::side_panel_stack::SidePanelStack::new();
+        secondary_panels.set_location_tag(RIGHT_STACK_TAG);
         Self {
             activity_bar: ActivityBar::default(),
             primary_side_bar: SideBar::new(Side::Left),
-            primary_panels: crate::side_panel_stack::SidePanelStack::new(),
+            primary_panels,
             secondary_side_bar: SideBar {
                 side: Side::Right,
                 visible: false,
                 ..SideBar::default()
             },
+            secondary_panels,
             editor_area: EditorArea::new(),
             panel_area: PanelArea::new(),
             status_bar: StatusBar::default(),
@@ -156,6 +169,11 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Default for Workbench<Tab
         }
     }
 }
+
+/// Cross-stack drag tag for the primary (left) stack. [feature-multi-region-sidebar]
+const LEFT_STACK_TAG: u8 = 0;
+/// Cross-stack drag tag for the secondary (right) stack. [feature-multi-region-sidebar]
+const RIGHT_STACK_TAG: u8 = 1;
 
 impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
     pub fn new() -> Self {
@@ -345,6 +363,32 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
             &self.editor_area.tree,
             group.0,
         )
+    }
+
+    /// Handle of the active tab inside a specific editor `group`, if the
+    /// group still exists and holds a tab. Unlike [`Self::active_handle`]
+    /// (which reads the *focused* group) this targets an arbitrary group —
+    /// the seam a linked/follower tab uses to read "what note is active over
+    /// there" each frame, given a stable [`GroupId`].
+    pub fn active_tab_in_group(&self, group: GroupId) -> Option<TabId> {
+        crate::internal::tree_adapter::active_handle_in_group(
+            &self.editor_area.tree,
+            group.0,
+        )
+    }
+
+    /// Every editor group in stable left-to-right, top-to-bottom traversal
+    /// order. Hosts use this to offer "link to a group" pickers; the order
+    /// matches [`Self::focus_group`]'s indexing.
+    pub fn groups(&self) -> Vec<GroupId> {
+        self.group_traversal()
+    }
+
+    /// The editor group currently holding `handle`, if it is open. Lets a
+    /// host resolve a tab-targeted link to the group that tab lives in.
+    pub fn group_of(&self, handle: TabId) -> Option<GroupId> {
+        crate::internal::tree_adapter::find_group_of(&self.editor_area.tree, handle)
+            .map(GroupId)
     }
 
     /// Programmatically activate `handle` in its enclosing tab group.
@@ -547,7 +591,13 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
         &mut self,
         ctx: &egui::Context,
         behavior: &mut impl Host<Tab, Mode>,
-    ) {
+    )
+    where
+        // `Send + Sync`: the side-panel stacks publish the cross-stack drag
+        // payload via egui's `insert_temp`. Every concrete host `Mode`
+        // satisfies it. [feature-multi-region-sidebar]
+        Mode: Send + Sync,
+    {
         let theme = behavior.theme(&ctx.style());
 
         // 1) Status bar — declared FIRST so it claims the full bottom
@@ -592,27 +642,53 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
                     let resp = self.activity_bar.show::<Tab, _>(ui, &theme, behavior);
                     if let Some(mode) = resp.clicked {
                         // VSCode switch semantics: clicking the focused
-                        // section's icon hides the side bar; clicking any
-                        // other icon switches that section into focus
-                        // (replacing the focused section in place, never
-                        // adding a split). The activity-bar highlight
-                        // tracks the focused section.
-                        let was_focused = self.primary_panels.focused.as_ref() == Some(&mode);
-                        if was_focused && self.primary_side_bar.visible {
-                            self.primary_side_bar.visible = false;
-                        } else {
-                            self.primary_panels.switch(mode);
-                            self.primary_side_bar.visible = true;
+                        // section's icon hides its bar; clicking any other
+                        // icon switches that container into focus on the
+                        // stack its location names (left → primary, right →
+                        // secondary), opening its ordered views as a group.
+                        // The activity-bar highlight tracks the focused
+                        // section. [feature-multi-region-sidebar]
+                        let views = behavior.container_views(&mode);
+                        match behavior.container_location(&mode) {
+                            crate::side_bar::Location::LeftBar => {
+                                let was_focused =
+                                    self.primary_panels.focused.as_ref() == Some(&mode);
+                                if was_focused && self.primary_side_bar.visible {
+                                    self.primary_side_bar.visible = false;
+                                } else {
+                                    self.primary_panels.switch_group(mode, views);
+                                    self.primary_side_bar.visible = true;
+                                }
+                            }
+                            crate::side_bar::Location::RightBar => {
+                                let was_focused =
+                                    self.secondary_panels.focused.as_ref() == Some(&mode);
+                                if was_focused && self.secondary_side_bar.visible {
+                                    self.secondary_side_bar.visible = false;
+                                } else {
+                                    self.secondary_panels.switch_group(mode, views);
+                                    self.secondary_side_bar.visible = true;
+                                }
+                            }
                         }
                         self.activity_bar.active = self.primary_panels.focused.clone();
                     }
                     if let Some(mode) = resp.dropped_out {
                         // Dragged an activity icon into the window → add it
-                        // as a new accordion section (VSCode "drag a view
-                        // into the sidebar"). [feature-multi-region-sidebar]
-                        self.primary_panels.add_section(mode);
+                        // as a new accordion section on its home stack
+                        // (VSCode "drag a view into the sidebar").
+                        // [feature-multi-region-sidebar]
+                        match behavior.container_location(&mode) {
+                            crate::side_bar::Location::LeftBar => {
+                                self.primary_panels.add_section(mode);
+                                self.primary_side_bar.visible = true;
+                            }
+                            crate::side_bar::Location::RightBar => {
+                                self.secondary_panels.add_section(mode);
+                                self.secondary_side_bar.visible = true;
+                            }
+                        }
                         self.activity_bar.active = self.primary_panels.focused.clone();
-                        self.primary_side_bar.visible = true;
                     }
                 });
         }
@@ -621,19 +697,18 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
         //    `side_panel_stack`: one or more collapsible feature sections,
         //    each header a drag handle for reordering. A lone section
         //    looks identical to the old single side bar.
-        self.show_primary_side_bar(ctx, &theme, behavior);
+        let left_drop = self.show_primary_side_bar(ctx, &theme, behavior);
 
-        // 4) Secondary side bar — fixed host content, independent of
-        //    the active activity.
-        show_side_bar::<Tab, _, _>(
-            &mut self.secondary_side_bar,
-            ctx,
-            "egui_workbench::secondary_side_bar",
-            &theme,
-            behavior,
-            None,
-            SideBarRole::Secondary,
-        );
+        // 4) Secondary side bar — the symmetric right-side accordion,
+        //    rendered through the SAME generic per-mode path as the
+        //    primary stack. [feature-multi-region-sidebar]
+        let right_drop = self.show_secondary_side_bar(ctx, &theme, behavior);
+
+        // Reconcile any cross-stack section drag committed this frame: a
+        // section dragged from one stack and released over the other.
+        // Done here, the owner of BOTH stacks, since a stack can't reach
+        // into its sibling. [feature-multi-region-sidebar]
+        self.reconcile_cross_stack_drops(left_drop, right_drop);
 
         // 5) Panel area — bottom-docked tabbed surface.
         //    Auto-hide when empty (SPEC §14.2).
@@ -709,10 +784,13 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
         ctx: &egui::Context,
         theme: &crate::theme::Palette,
         behavior: &mut impl Host<Tab, Mode>,
-    ) {
+    ) -> Option<crate::side_panel_stack::CrossStackDrop<Mode>>
+    where
+        Mode: Send + Sync,
+    {
         let bar = &mut self.primary_side_bar;
         if !bar.visible || self.primary_panels.is_empty() {
-            return;
+            return None;
         }
         let frame = Frame::side_top_panel(&ctx.style()).fill(theme.side_bar_bg);
         let panel = match bar.side {
@@ -722,6 +800,7 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
             }
         };
         let clamped = bar.width.clamp(bar.min_width, bar.max_width);
+        let mut cross_drop = None;
         let response = panel
             .frame(frame)
             .resizable(true)
@@ -729,7 +808,9 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
             .min_width(bar.min_width)
             .max_width(bar.max_width)
             .show(ctx, |ui| {
-                if let Some(clicked) = self.primary_panels.ui::<Tab, _>(ui, theme, behavior) {
+                if let Some(clicked) =
+                    self.primary_panels.ui::<Tab, _>(ui, theme, behavior, &mut cross_drop)
+                {
                     self.activity_bar.active = Some(clicked);
                 }
             });
@@ -737,6 +818,93 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
         let new_width = actual.clamp(bar.min_width, bar.max_width);
         if (new_width - bar.width).abs() > 0.5 {
             bar.width = new_width;
+        }
+        cross_drop
+    }
+
+    /// Open `mode` as a focused section on the secondary (right) stack
+    /// and show the secondary side bar. The right-stack counterpart of
+    /// [`Self::open_primary_panel`]. [feature-multi-region-sidebar]
+    pub fn open_secondary_panel(&mut self, mode: Mode) {
+        self.secondary_panels.switch(mode);
+        self.secondary_side_bar.visible = true;
+    }
+
+    /// Render the secondary side bar: the right-side accordion of feature
+    /// sections, through the SAME generic per-mode path as the primary.
+    fn show_secondary_side_bar(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &crate::theme::Palette,
+        behavior: &mut impl Host<Tab, Mode>,
+    ) -> Option<crate::side_panel_stack::CrossStackDrop<Mode>>
+    where
+        Mode: Send + Sync,
+    {
+        let bar = &mut self.secondary_side_bar;
+        if !bar.visible || self.secondary_panels.is_empty() {
+            return None;
+        }
+        let frame = Frame::side_top_panel(&ctx.style()).fill(theme.side_bar_bg);
+        let panel = match bar.side {
+            crate::side_bar::Side::Left => {
+                egui::SidePanel::left("egui_workbench::secondary_side_bar")
+            }
+            crate::side_bar::Side::Right => {
+                egui::SidePanel::right("egui_workbench::secondary_side_bar")
+            }
+        };
+        let clamped = bar.width.clamp(bar.min_width, bar.max_width);
+        let mut cross_drop = None;
+        let response = panel
+            .frame(frame)
+            .resizable(true)
+            .default_width(clamped)
+            .min_width(bar.min_width)
+            .max_width(bar.max_width)
+            .show(ctx, |ui| {
+                let _ = self
+                    .secondary_panels
+                    .ui::<Tab, _>(ui, theme, behavior, &mut cross_drop);
+            });
+        let actual = response.response.rect.width();
+        let new_width = actual.clamp(bar.min_width, bar.max_width);
+        if (new_width - bar.width).abs() > 0.5 {
+            bar.width = new_width;
+        }
+        cross_drop
+    }
+
+    /// Apply cross-stack section moves committed this frame. Each
+    /// [`CrossStackDrop`] names the source stack (by tag) and the view to
+    /// move ONTO the stack that reported it: remove from source, add to
+    /// target, focus it there, and mark dirty so 2g re-persists the new
+    /// placement. A drop whose source is the same stack (shouldn't happen —
+    /// the stack filters those) is ignored. [feature-multi-region-sidebar]
+    fn reconcile_cross_stack_drops(
+        &mut self,
+        left_drop: Option<crate::side_panel_stack::CrossStackDrop<Mode>>,
+        right_drop: Option<crate::side_panel_stack::CrossStackDrop<Mode>>,
+    ) {
+        // A view dropped ONTO the left stack from the right.
+        if let Some(drop) = left_drop
+            && drop.source_tag == RIGHT_STACK_TAG
+        {
+            self.secondary_panels.close(&drop.view_id);
+            self.primary_panels.add_section(drop.view_id);
+            self.activity_bar.active = self.primary_panels.focused.clone();
+            self.primary_side_bar.visible = true;
+            self.dirty = true;
+        }
+        // A view dropped ONTO the right stack from the left.
+        if let Some(drop) = right_drop
+            && drop.source_tag == LEFT_STACK_TAG
+        {
+            self.primary_panels.close(&drop.view_id);
+            self.secondary_panels.add_section(drop.view_id);
+            self.secondary_side_bar.visible = true;
+            self.activity_bar.active = self.primary_panels.focused.clone();
+            self.dirty = true;
         }
     }
 

@@ -64,6 +64,49 @@ pub struct SidePanelStack<Mode> {
     /// activity again restores it (VSCode-style view-container memory).
     /// In-memory only — not persisted across sessions.
     saved_groups: HashMap<Mode, SavedGroup<Mode>>,
+    /// Opaque label distinguishing this stack from its sibling so a
+    /// *cross-stack* header drag (a section dragged from the left stack
+    /// onto the right, or vice versa) can tell whose drag it is. Within a
+    /// single stack the within-stack reorder path (a bare `usize` index in
+    /// this stack's own ui memory) is used instead; this tag only matters
+    /// when a foreign stack inspects the shared, global drag payload. The
+    /// host assigns each of its stacks a distinct value (e.g. `0` = left,
+    /// `1` = right) via [`Self::set_location_tag`]. Defaults to `0`.
+    /// [feature-multi-region-sidebar]
+    location_tag: u8,
+}
+
+/// Globally-scoped section-drag payload, published in shared `ctx.data`
+/// while a header drag is in flight so the *other* stack can recognise a
+/// section being dragged onto it (the within-stack reorder uses a bare
+/// `usize` index scoped to its own `ui.id()`, which a foreign stack can't
+/// interpret — hence this carries the view id and the source stack's tag).
+/// [feature-multi-region-sidebar]
+#[derive(Clone)]
+struct SectionDragPayload<Mode> {
+    /// `location_tag` of the stack the drag started in.
+    source_tag: u8,
+    /// The view id being dragged.
+    view_id: Mode,
+}
+
+/// Shared id under which the global section-drag payload lives in
+/// `ctx.data`. One id for both stacks (the payload's `source_tag`
+/// disambiguates), so either can read the other's in-flight drag.
+fn section_drag_payload_id() -> egui::Id {
+    egui::Id::new("egui_workbench::section_drag_payload")
+}
+
+/// A committed cross-stack section move, reported out of [`SidePanelStack::ui`]
+/// for the owner of both stacks to reconcile: the dragged view was released
+/// over THIS stack but originated in the sibling identified by `source_tag`.
+/// The owner removes `view_id` from the source stack and adds it here.
+/// [feature-multi-region-sidebar]
+pub(crate) struct CrossStackDrop<Mode> {
+    /// `location_tag` of the stack the section came from.
+    pub source_tag: u8,
+    /// The view id to move onto the target (this) stack.
+    pub view_id: Mode,
 }
 
 impl<Mode: Clone + Eq + Hash + 'static> Default for SidePanelStack<Mode> {
@@ -74,6 +117,7 @@ impl<Mode: Clone + Eq + Hash + 'static> Default for SidePanelStack<Mode> {
             weights: HashMap::new(),
             focused: None,
             saved_groups: HashMap::new(),
+            location_tag: 0,
         }
     }
 }
@@ -81,6 +125,14 @@ impl<Mode: Clone + Eq + Hash + 'static> Default for SidePanelStack<Mode> {
 impl<Mode: Clone + Eq + Hash + 'static> SidePanelStack<Mode> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set this stack's cross-stack drag tag (see [`Self::location_tag`]).
+    /// The host gives its two stacks distinct values so a section dragged
+    /// from one onto the other can be recognised as a cross-stack move.
+    /// [feature-multi-region-sidebar]
+    pub const fn set_location_tag(&mut self, tag: u8) {
+        self.location_tag = tag;
     }
 
     /// Whether any section is open.
@@ -156,23 +208,43 @@ impl<Mode: Clone + Eq + Hash + 'static> SidePanelStack<Mode> {
     /// built with [`Self::add_section`] (the `+` menu or dragging an icon
     /// in). Always focuses `mode`.
     pub fn switch(&mut self, mode: Mode) {
-        if self.contains(&mode) {
-            self.collapsed.remove(&mode);
-            self.focused = Some(mode);
+        self.switch_group(mode.clone(), vec![mode]);
+    }
+
+    /// Generalised [`Self::switch`] from one mode to an ordered *group* of
+    /// views sharing a container. `group` is the container id the
+    /// arrangement is remembered under (for a single-view container the
+    /// group id equals the lone view id, so this is byte-identical to the
+    /// old `switch`).
+    ///
+    /// If any of `views` is already an open section, that arrangement is
+    /// kept and the first already-open view is focused. Otherwise the
+    /// current arrangement is stashed (under its own anchor) and the
+    /// container's **remembered group is restored** — or, failing that,
+    /// exactly `views` is opened (focusing the first). A switch never adds
+    /// to an existing split; extra sections come from [`Self::add_section`].
+    pub fn switch_group(&mut self, group: Mode, views: Vec<Mode>) {
+        // Already-open: focus the first open view, keep the arrangement.
+        if let Some(open) = views.iter().find(|v| self.contains(v)) {
+            self.collapsed.remove(open);
+            self.focused = Some(open.clone());
             return;
         }
         self.stash_current();
-        if let Some(group) = self.saved_groups.remove(&mode) {
-            self.sections = group.sections;
-            self.collapsed = group.collapsed;
-            self.weights = group.weights;
+        if let Some(saved) = self.saved_groups.remove(&group) {
+            self.sections = saved.sections;
+            self.collapsed = saved.collapsed;
+            self.weights = saved.weights;
         } else {
-            self.sections = vec![mode.clone()];
+            self.sections = views.clone();
             self.collapsed = HashSet::new();
             self.weights = HashMap::new();
         }
-        self.collapsed.remove(&mode);
-        self.focused = Some(mode);
+        let focus = self.sections.first().cloned().or_else(|| views.first().cloned());
+        if let Some(f) = &focus {
+            self.collapsed.remove(f);
+        }
+        self.focused = focus;
     }
 
     /// Stash the current arrangement under its anchor (top) section, so a
@@ -248,17 +320,33 @@ impl<Mode: Clone + Eq + Hash + 'static> SidePanelStack<Mode> {
     /// Render the accordion into `ui`. Returns the section whose header
     /// was activated this frame (so the workbench can sync the
     /// activity-bar highlight), or `None`.
+    ///
+    /// `cross_drop` is an out-param: when a section dragged FROM the
+    /// sibling stack is released over this one, the pending move is written
+    /// here for the owner of both stacks to reconcile (this stack can't
+    /// reach into its sibling). It stays `None` for the common
+    /// within-stack reorder, which commits internally as before.
+    /// [feature-multi-region-sidebar]
     pub(crate) fn ui<Tab, B>(
         &mut self,
         ui: &mut egui::Ui,
         theme: &Palette,
         behavior: &mut B,
+        cross_drop: &mut Option<CrossStackDrop<Mode>>,
     ) -> Option<Mode>
     where
         Tab: Document,
         B: Host<Tab, Mode> + ?Sized,
+        // `Send + Sync` only here (and on `Render`): the cross-stack drag
+        // payload is published via egui's `insert_temp`, which requires it.
+        // Every concrete host `Mode` (an id enum / `String`) satisfies it.
+        Mode: Send + Sync,
     {
+        // Even with no open sections this stack can still be the *target*
+        // of a cross-stack drop (drag the last view off one side onto the
+        // empty other side). Handle that before the empty-state early out.
         if self.sections.is_empty() {
+            self.paint_empty_drop_target(ui, cross_drop);
             ui.centered_and_justified(|ui| {
                 ui.label(egui::RichText::new("No panel open").weak());
             });
@@ -271,10 +359,63 @@ impl<Mode: Clone + Eq + Hash + 'static> SidePanelStack<Mode> {
             clicked: None,
             add_request: None,
             close_request: None,
+            cross_drop,
             _doc: std::marker::PhantomData::<Tab>,
         };
         render.run(ui)
     }
+
+    /// When this stack has no sections it allocates no geometry, so the
+    /// `Render` drop-target path never runs; mirror it here so an empty
+    /// stack still lights up and accepts a foreign section-drag release.
+    /// [feature-multi-region-sidebar]
+    fn paint_empty_drop_target(
+        &self,
+        ui: &mut egui::Ui,
+        cross_drop: &mut Option<CrossStackDrop<Mode>>,
+    ) {
+        let outer = ui.available_rect_before_wrap();
+        ui.allocate_rect(outer, Sense::hover());
+        let foreign = foreign_section_drag::<Mode>(ui, self.location_tag);
+        let hovering = ui
+            .input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()))
+            .is_some_and(|p| outer.contains(p));
+        if let Some(payload) = &foreign {
+            if hovering {
+                let painter = ui.painter();
+                let accent = ui.visuals().selection.bg_fill;
+                painter.rect_filled(outer, 0.0, accent.gamma_multiply(0.10));
+            }
+            ui.ctx().request_repaint();
+            if hovering && ui.input(|i| i.pointer.any_released()) {
+                *cross_drop = Some(CrossStackDrop {
+                    source_tag: payload.source_tag,
+                    view_id: payload.view_id.clone(),
+                });
+                clear_section_drag_payload::<Mode>(ui);
+            }
+        }
+    }
+}
+
+/// Read the global section-drag payload, returning it only when it
+/// originated in a DIFFERENT stack than `self_tag` (a genuine cross-stack
+/// drag). A payload whose `source_tag == self_tag` is this stack's own
+/// drag — handled by the within-stack reorder path — so it's filtered out.
+/// [feature-multi-region-sidebar]
+fn foreign_section_drag<Mode: Clone + 'static>(
+    ui: &egui::Ui,
+    self_tag: u8,
+) -> Option<SectionDragPayload<Mode>> {
+    ui.ctx()
+        .data(|d| d.get_temp::<SectionDragPayload<Mode>>(section_drag_payload_id()))
+        .filter(|p| p.source_tag != self_tag)
+}
+
+/// Drop the global section-drag payload once a cross-stack move commits.
+fn clear_section_drag_payload<Mode: 'static>(ui: &egui::Ui) {
+    ui.ctx()
+        .data_mut(|d| d.remove::<SectionDragPayload<Mode>>(section_drag_payload_id()));
 }
 
 /// Per-frame render state, split into `&mut self` methods so each stays
@@ -294,13 +435,19 @@ where
     add_request: Option<Mode>,
     /// A header-menu "Close panel" pick to apply after the render pass.
     close_request: Option<Mode>,
+    /// Out-channel for a cross-stack section drop landed on this stack
+    /// (reconciled by the owner of both stacks). [feature-multi-region-sidebar]
+    cross_drop: &'a mut Option<CrossStackDrop<Mode>>,
     _doc: std::marker::PhantomData<Tab>,
 }
 
 impl<Tab, Mode, B> Render<'_, Tab, Mode, B>
 where
     Tab: Document,
-    Mode: Clone + Eq + Hash + 'static,
+    // `Send + Sync`: `render_header` publishes the global cross-stack drag
+    // payload via egui's `insert_temp`. Constructed only from
+    // `SidePanelStack::ui`, which carries the same bound.
+    Mode: Clone + Eq + Hash + Send + Sync + 'static,
     B: Host<Tab, Mode> + ?Sized,
 {
     fn run(mut self, ui: &mut egui::Ui) -> Option<Mode> {
@@ -315,7 +462,7 @@ where
             self.render_section(ui, i, geom);
         }
         self.resize_handles(ui, &layout);
-        self.reorder(ui, &layout);
+        self.reorder(ui, &layout, outer);
         self.paint_drop_target(ui, outer);
         if let Some(mode) = self.add_request.take() {
             self.stack.add_section(mode);
@@ -396,8 +543,24 @@ where
             .interact(rect, header_id(ui, idx), Sense::click_and_drag())
             .on_hover_cursor(CursorIcon::Grab);
         if resp.drag_started() {
+            // Within-stack reorder path: a bare index scoped to THIS
+            // stack's ui id (precise; unchanged).
             let src_id = ui.id().with("egui_workbench::section_drag_src");
             ui.memory_mut(|m| m.data.insert_temp::<usize>(src_id, idx));
+            // Cross-stack path: ALSO publish a global payload carrying the
+            // view id + this stack's tag, so the sibling stack can light up
+            // and accept the section if the drag is released over it. The
+            // index path above still drives any same-stack reorder.
+            // [feature-multi-region-sidebar]
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(
+                    section_drag_payload_id(),
+                    SectionDragPayload {
+                        source_tag: self.stack.location_tag,
+                        view_id: mode.clone(),
+                    },
+                );
+            });
         }
 
         if ui.is_rect_visible(rect) {
@@ -552,7 +715,7 @@ where
     /// Drag-to-reorder of section headers. The dragged index was stashed
     /// in ui memory by `render_header`; here we preview an insertion line
     /// and commit the move on release. Kept lean — sections are few.
-    fn reorder(&mut self, ui: &mut egui::Ui, layout: &[SectionGeom]) {
+    fn reorder(&mut self, ui: &mut egui::Ui, layout: &[SectionGeom], outer: Rect) {
         let src_id = ui.id().with("egui_workbench::section_drag_src");
         let Some(src) = ui.memory(|m| m.data.get_temp::<usize>(src_id)) else {
             return;
@@ -564,7 +727,13 @@ where
             ui.ctx().request_repaint();
         }
         if ui.input(|i| i.pointer.any_released()) {
-            if let Some(tgt) = target
+            // Only reorder if the release landed over THIS stack — a release
+            // outside it (over the sibling stack) is a cross-stack move,
+            // handled by the target stack's `paint_drop_target`, so leave
+            // the sections here untouched and let the owner remove the view.
+            let released_here = pointer.is_some_and(|p| outer.contains(p));
+            if released_here
+                && let Some(tgt) = target
                 && tgt != src
                 && src < self.stack.sections.len()
             {
@@ -573,17 +742,36 @@ where
                 self.stack.sections.insert(tgt, m);
             }
             ui.memory_mut(|m| m.data.remove::<usize>(src_id));
+            // Drop the global payload only on a release that landed back
+            // inside THIS stack. If the release was elsewhere it may be a
+            // cross-stack move onto the sibling — leave the payload so the
+            // target stack's `paint_drop_target` can still read and consume
+            // it this frame (it clears it on commit). A release into dead
+            // space leaves a stale payload, but the next drag overwrites it
+            // and no stack will accept it (pointer isn't over either).
+            if released_here {
+                clear_section_drag_payload::<Mode>(ui);
+            }
         }
     }
 
-    /// When an activity item is mid-drag and hovering this region, draw a
-    /// drop-target highlight so the user sees the side bar will accept it
-    /// (the workbench turns the drop into an `add_section`).
-    fn paint_drop_target(&self, ui: &egui::Ui, outer: Rect) {
-        let dragging = ui
+    /// Draw a drop-target highlight + accept releases when something is
+    /// being dragged onto this region. Two drag sources qualify:
+    /// - an **activity-bar icon** mid-drag (the workbench turns its
+    ///   release into an `add_section`), keyed on the activity-bar flag;
+    /// - a **section header from the sibling stack** (a cross-stack move),
+    ///   recognised via the global section-drag payload whose `source_tag`
+    ///   differs from this stack's. On release of the latter the pending
+    ///   move is written to `self.cross_drop` for the owner to reconcile.
+    ///
+    /// [feature-multi-region-sidebar]
+    fn paint_drop_target(&mut self, ui: &egui::Ui, outer: Rect) {
+        let icon_dragging = ui
             .ctx()
             .data(|d| d.get_temp::<bool>(crate::activity_bar::drag_active_id()))
             .unwrap_or(false);
+        let foreign = foreign_section_drag::<Mode>(ui, self.stack.location_tag);
+        let dragging = icon_dragging || foreign.is_some();
         let hovering = ui
             .input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()))
             .is_some_and(|p| outer.contains(p));
@@ -596,6 +784,17 @@ where
                 Stroke::new(2.0, self.theme.accent),
                 egui::StrokeKind::Inside,
             );
+        }
+        // Commit a cross-stack section drop released over this stack.
+        if let Some(payload) = foreign {
+            ui.ctx().request_repaint();
+            if hovering && ui.input(|i| i.pointer.any_released()) {
+                *self.cross_drop = Some(CrossStackDrop {
+                    source_tag: payload.source_tag,
+                    view_id: payload.view_id.clone(),
+                });
+                clear_section_drag_payload::<Mode>(ui);
+            }
         }
     }
 
@@ -707,6 +906,49 @@ mod tests {
         s.switch(1); // 1 is already open -> just focus, keep the split
         assert_eq!(s.open_modes(), &[1, 2]);
         assert_eq!(s.focused(), Some(&1));
+    }
+
+    #[test]
+    fn cross_stack_move_transfers_section() {
+        // The pure-state half of a cross-stack drag (2f): a view present in
+        // stack A is "moved" to stack B via the same close+add_section pair
+        // the workbench's reconcile path runs. A must lose it; B must gain
+        // it and focus it; A's focus/contents stay sane.
+        let mut a = SidePanelStack::<u32>::new();
+        a.set_location_tag(0);
+        a.switch(1); // A: [1]
+        a.add_section(2); // A: [1, 2], focused 2
+        let mut b = SidePanelStack::<u32>::new();
+        b.set_location_tag(1);
+        b.switch(9); // B: [9]
+
+        // Move view 2 from A onto B.
+        a.close(&2);
+        b.add_section(2);
+
+        assert!(!a.contains(&2), "source no longer holds the moved view");
+        assert_eq!(a.open_modes(), &[1]);
+        assert_eq!(a.focused(), Some(&1), "source refocuses a neighbour");
+        assert!(b.contains(&2), "target gained the moved view");
+        assert_eq!(b.open_modes(), &[9, 2]);
+        assert_eq!(b.focused(), Some(&2), "target focuses the dropped view");
+    }
+
+    #[test]
+    fn cross_stack_move_of_last_section_empties_source() {
+        // Dragging a stack's only view onto the other empties the source
+        // and the target accepts it (the empty-target drop path).
+        let mut a = SidePanelStack::<u32>::new();
+        a.switch(1); // A: [1]
+        let mut b = SidePanelStack::<u32>::new();
+
+        a.close(&1);
+        b.add_section(1);
+
+        assert!(a.is_empty(), "source emptied");
+        assert_eq!(a.focused(), None);
+        assert_eq!(b.open_modes(), &[1]);
+        assert_eq!(b.focused(), Some(&1));
     }
 
     #[test]

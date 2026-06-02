@@ -72,6 +72,7 @@ fn default_layout_snapshot() {
 fn with_side_bars_open_snapshot() {
     run_and_snapshot("with_side_bars_open", |wb| {
         wb.primary_side_bar.visible = true;
+        wb.secondary_panels.switch(SnapMode::Files);
         wb.secondary_side_bar.visible = true;
         wb.activity_bar.set_active(Some(SnapMode::Files));
     });

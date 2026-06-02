@@ -90,9 +90,6 @@ impl Host<Tab, Mode> for Behavior {
     fn side_bar_ui(&mut self, ui: &mut egui::Ui, _mode: &Mode) {
         ui.label("sidebar body");
     }
-    fn secondary_side_bar_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label("secondary body");
-    }
     fn activity_items(&self) -> Vec<egui_workbench::activity_bar::Item<Mode>> {
         vec![
             egui_workbench::activity_bar::Item {
@@ -125,6 +122,7 @@ const STEADY_STATE_CEILING_BYTES: usize = 4 * 1024 * 1024;
 fn workbench_steady_state_stays_under_ceiling() {
     let mut wb = Workbench::<Tab, Mode>::new();
     wb.activity_bar.set_active(Some(Mode::Files));
+    wb.secondary_panels.switch(Mode::Search);
     wb.secondary_side_bar.visible = true;
     for i in 0..4 {
         wb.open_tab(

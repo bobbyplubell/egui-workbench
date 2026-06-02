@@ -34,10 +34,6 @@ impl Host<TestTab, TestMode> for WideBehavior {
         ui.add_sized([400.0, 20.0], egui::Label::new("wide content"));
     }
 
-    fn secondary_side_bar_ui(&mut self, ui: &mut egui::Ui) {
-        ui.add_sized([400.0, 20.0], egui::Label::new("wide content"));
-    }
-
     fn activity_items(&self) -> Vec<egui_workbench::activity_bar::Item<TestMode>> {
         vec![egui_workbench::activity_bar::Item {
             label: "Mode".into(),
@@ -55,6 +51,9 @@ fn build_harness(
     // Open the panel into the splittable primary region (the activity-bar
     // highlight follows the focused pane). [feature-multi-region-sidebar]
     wb.open_primary_panel(TestMode);
+    // Seed the right stack so the secondary bar renders through the
+    // generic per-mode path (its content comes from `side_bar_ui`).
+    wb.secondary_panels.switch(TestMode);
     wb.secondary_side_bar.visible = true;
     egui_kittest::Harness::builder()
         .with_size(size)

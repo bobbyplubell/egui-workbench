@@ -8,6 +8,7 @@
 use std::hash::Hash;
 
 use crate::activity_bar::Item;
+use crate::side_bar::Location;
 use crate::tab::{Document, UiContext};
 use crate::theme::{TabStyle, Palette};
 
@@ -46,46 +47,23 @@ pub trait Host<Tab: Document, Mode: Clone + Eq + Hash + 'static> {
     /// active activity.
     fn side_bar_ui(&mut self, _ui: &mut egui::Ui, _mode: &Mode) {}
 
-    /// Render the content of the secondary side bar. The secondary bar
-    /// is not driven by the activity bar — its content is fixed by the
-    /// host (typical use: a chat / inspector / output panel that lives
-    /// on the opposite edge from the primary). Default is empty.
-    fn secondary_side_bar_ui(&mut self, _ui: &mut egui::Ui) {}
-
-    /// Title shown in the primary side bar header. Defaults to empty.
+    /// Title shown in a side bar section header. Defaults to empty. The
+    /// SAME path serves both the left (primary) and right (secondary)
+    /// stacks; the mode is the section's view id. Defaults to empty.
     fn side_bar_title(&self, _mode: &Mode) -> egui::WidgetText {
         egui::WidgetText::default()
     }
 
-    /// Title shown in the secondary side bar header. Defaults to empty.
-    fn secondary_side_bar_title(&self) -> egui::WidgetText {
-        egui::WidgetText::default()
-    }
-
-    /// Custom rendering for the secondary side bar's title slot. Default
-    /// just labels `secondary_side_bar_title()`. Override to draw an
-    /// icon or other rich content in place of the text.
-    fn secondary_side_bar_title_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label(self.secondary_side_bar_title());
-    }
-
-    /// Extra buttons rendered next to the "…" menu in the primary side
-    /// bar's title row. Mode-specific (e.g. "new note" for a file panel).
+    /// Extra buttons rendered in a side bar section header's right
+    /// cluster. Mode-specific (e.g. "new note" for files, "new/delete
+    /// session" for chat). Shared by both stacks.
     fn side_bar_action_buttons(&mut self, _ui: &mut egui::Ui, _mode: &Mode) {}
 
-    /// Contents of the popup that opens from the primary side bar's "…"
-    /// button. Mode-specific (e.g. refresh / sort menu for a file panel).
+    /// Contents of the popup that opens from a side bar section's header
+    /// context menu. Mode-specific (e.g. refresh / sort menu for files).
     /// Default surfaces nothing extra; the workbench still appends its
-    /// own "Move to Other Side" / "Hide" items after.
+    /// own "Add panel" / "Close panel" items after. Shared by both stacks.
     fn side_bar_actions_menu(&mut self, _ui: &mut egui::Ui, _mode: &Mode) {}
-
-    /// Extra buttons rendered next to the "…" menu in the secondary side
-    /// bar's title row.
-    fn secondary_side_bar_action_buttons(&mut self, _ui: &mut egui::Ui) {}
-
-    /// Contents of the popup that opens from the secondary side bar's
-    /// "…" button.
-    fn secondary_side_bar_actions_menu(&mut self, _ui: &mut egui::Ui) {}
 
     // === Activity bar ===
 
@@ -93,6 +71,22 @@ pub trait Host<Tab: Document, Mode: Clone + Eq + Hash + 'static> {
     /// content, though the bar itself still draws).
     fn activity_items(&self) -> Vec<Item<Mode>> {
         Vec::new()
+    }
+
+    /// The ordered view ids that an activity-bar container opens when its
+    /// icon is clicked. A single-view activity returns `vec![container]`;
+    /// a multi-view container returns each of its views. The workbench
+    /// feeds these to [`crate::side_panel_stack::SidePanelStack::switch_group`].
+    /// Default: the container id alone. [feature-multi-region-sidebar]
+    fn container_views(&self, container: &Mode) -> Vec<Mode> {
+        vec![container.clone()]
+    }
+
+    /// Which stack an activity-bar container drives. `LeftBar` →
+    /// `primary_panels`; `RightBar` → `secondary_panels`. Default
+    /// `LeftBar`. [feature-multi-region-sidebar]
+    fn container_location(&self, _container: &Mode) -> Location {
+        Location::LeftBar
     }
 
     /// Right-click context menu items for an activity.
