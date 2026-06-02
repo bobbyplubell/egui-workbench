@@ -836,8 +836,14 @@ where
         SimplificationOptions {
             prune_empty_tabs: true,
             prune_empty_containers: true,
-            prune_single_child_tabs: false,
-            prune_single_child_containers: false,
+            // Collapse redundant nesting that a split/merge can leave behind: a
+            // Tabs whose only child is another container, or a single-child
+            // Linear/Grid. Without this you can end up with a tabs container
+            // inside another and TWO stacked tab bars. `all_panes_must_have_tabs`
+            // still wins for a lone PANE (egui_tiles keeps that tab bar), so a
+            // normal single-editor group is unaffected.
+            prune_single_child_tabs: true,
+            prune_single_child_containers: true,
             all_panes_must_have_tabs: true,
             join_nested_linear_containers: true,
         }
