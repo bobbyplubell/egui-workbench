@@ -627,10 +627,13 @@ fn paint_activity_item(
     }
 
     let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(size));
-    let fg = if is_active {
+    // The active panel's icon (or a hovered one, for affordance) renders at full
+    // strength; inactive peers are greyed to the weak-text color so the active
+    // one reads first. [style-activity-emphasis]
+    let fg = if is_active || hovered {
         visuals.fg_stroke.color
     } else {
-        visuals.text_color()
+        ui.visuals().weak_text_color()
     };
     let fg = fg.gamma_multiply(opacity);
     if let Some(image) = icon {

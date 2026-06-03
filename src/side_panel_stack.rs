@@ -31,6 +31,11 @@ use crate::theme::Palette;
 
 /// Height of a section header row (the drag handle + twistie).
 const HEADER_HEIGHT: f32 = 26.0;
+
+/// Horizontal padding re-applied to each section body so its contents keep a
+/// left/right inset even though the side-bar frame runs edge to edge (which lets
+/// the section headers + their divider lines reach the panel edges).
+const SECTION_BODY_H_PAD: f32 = 8.0;
 /// An expanded section's body never shrinks below this via resize; to go
 /// smaller the user collapses the section with its twistie.
 const MIN_BODY: f32 = 48.0;
@@ -520,6 +525,11 @@ where
         let collapsed = self.stack.is_collapsed(&mode);
         self.render_header(ui, idx, &mode, geom.header, collapsed);
         if let Some(body) = geom.body {
+            // The side-bar frame no longer insets horizontally (so headers and
+            // their dividers run edge to edge); re-inset the body here so the
+            // view's contents keep their left/right padding. The header geom
+            // stays full-width, so resize/reorder still span the panel.
+            let body = body.shrink2(egui::vec2(SECTION_BODY_H_PAD, 0.0));
             let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body));
             body_ui.set_clip_rect(body);
             self.behavior.side_bar_ui(&mut body_ui, &mode);
@@ -564,22 +574,28 @@ where
         }
 
         if ui.is_rect_visible(rect) {
+            // The header background + divider lines run the FULL panel width
+            // (edge to edge); the header's interior (twistie, title, action
+            // buttons) sits in an inset sub-rect so it lines up with the body
+            // content, which is inset by the same amount (`render_section`).
+            let inner = rect.shrink2(egui::vec2(SECTION_BODY_H_PAD, 0.0));
             ui.painter().rect_filled(rect, 0.0, self.theme.side_bar_bg);
-            ui.painter().hline(
-                rect.x_range(),
-                rect.bottom(),
-                (1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
-            );
-            paint_twistie(ui, rect, collapsed, ui.visuals().text_color());
+            let divider = ui.visuals().widgets.noninteractive.bg_stroke.color;
+            // Separator ABOVE every section header, so stacked accordion sections
+            // read as distinct views — and so the topmost one is delineated from
+            // the global toolbar above the side bar rather than merging into it.
+            ui.painter().hline(rect.x_range(), rect.top(), (1.0, divider));
+            ui.painter().hline(rect.x_range(), rect.bottom(), (1.0, divider));
+            paint_twistie(ui, inner, collapsed, ui.visuals().text_color());
             let title = self.behavior.side_bar_title(mode);
             let galley = title.into_galley(
                 ui,
                 Some(egui::TextWrapMode::Truncate),
-                (rect.width() - 50.0).max(0.0),
+                (inner.width() - 50.0).max(0.0),
                 egui::TextStyle::Button.resolve(ui.style()),
             );
             ui.painter().galley(
-                egui::pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0),
+                egui::pos2(inner.left() + 22.0, rect.center().y - galley.size().y / 2.0),
                 galley,
                 ui.visuals().text_color(),
             );
@@ -587,8 +603,8 @@ where
             // new-note). Rendered after the drag interact so their clicks
             // win over it (matches the activity-bar pattern).
             let cluster = Rect::from_min_max(
-                egui::pos2(rect.right() - 72.0, rect.top()),
-                rect.right_bottom(),
+                egui::pos2(inner.right() - 72.0, rect.top()),
+                egui::pos2(inner.right(), rect.bottom()),
             );
             let mut right = ui.new_child(
                 egui::UiBuilder::new()

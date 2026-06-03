@@ -134,6 +134,21 @@ pub struct Workbench<Tab: Document, Mode: Clone + Eq + Hash + 'static> {
     pub editor_area: EditorArea<Tab>,
     pub panel_area: PanelArea<Tab>,
     pub status_bar: StatusBar,
+    /// Reader / focus mode. When set, [`Self::ui`] hides every chrome
+    /// region (status bar, activity bar, both side bars, panel area) at
+    /// render time, leaving only the central editor area to fill the
+    /// viewport. Gating is render-time only: the `visible` booleans on the
+    /// individual regions are left untouched so the user's collapse choices
+    /// survive a toggle and persistence saves the true state. The host owns
+    /// any further chrome (e.g. a global top bar) and decides whether it
+    /// stays visible. Session-level, not per-tab.
+    pub reader_mode: bool,
+    /// When true, the editor-area tab strip (the row of tab handles) is
+    /// suppressed at render time. Driven by the host — typically
+    /// `reader_mode && <host setting>` — and, like `reader_mode`, it is a
+    /// render-time gate only: the tabs and their layout are untouched, so the
+    /// strip returns when this clears. Session-level, not per-tab.
+    pub hide_tab_strip: bool,
     pub(crate) next_handle: u64,
     /// Set to true any time the layout structure changes — useful for
     /// hosts that persist layout on-change.
@@ -163,6 +178,8 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Default for Workbench<Tab
             editor_area: EditorArea::new(),
             panel_area: PanelArea::new(),
             status_bar: StatusBar::default(),
+            reader_mode: false,
+            hide_tab_strip: false,
             next_handle: 1,
             dirty: false,
             _mode: PhantomData,
@@ -428,6 +445,28 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
         self.panel_area.toggle();
     }
 
+    /// Whether reader / focus mode is active.
+    pub const fn reader_mode(&self) -> bool {
+        self.reader_mode
+    }
+
+    /// Set reader / focus mode on or off.
+    pub const fn set_reader_mode(&mut self, on: bool) {
+        self.reader_mode = on;
+    }
+
+    /// Show or hide the editor-area tab strip (render-time gate only).
+    pub const fn set_hide_tab_strip(&mut self, hide: bool) {
+        self.hide_tab_strip = hide;
+    }
+
+    /// Toggle reader / focus mode. When on, [`Self::ui`] suppresses all
+    /// chrome regions at render time without mutating their `visible`
+    /// state, so the collapse choices are restored on toggle-off.
+    pub const fn toggle_reader_mode(&mut self) {
+        self.reader_mode = !self.reader_mode;
+    }
+
     /// Set which edge the primary side bar lives on.
     pub const fn set_side_bar_side(&mut self, side: Side) {
         self.primary_side_bar.side = side;
@@ -610,7 +649,7 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
         //    status bar at the top of this fn makes the side bars stop
         //    at `status_bar.top` instead — the bar then spans
         //    activity-bar → secondary-side-bar full width.
-        if self.status_bar.visible {
+        if self.status_bar.visible && !self.reader_mode {
             egui::TopBottomPanel::bottom("egui_workbench::status_bar")
                 .resizable(false)
                 .exact_height(22.0)
@@ -620,7 +659,8 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
         }
 
         // 2) Activity bar — fixed narrow strip on the leading edge.
-        if self.activity_bar.is_visible() {
+        //    Suppressed in reader mode (render-time gate only).
+        if self.activity_bar.is_visible() && !self.reader_mode {
             let activity_panel = match self.activity_bar.side {
                 Side::Left => egui::SidePanel::left("egui_workbench::activity_bar"),
                 Side::Right => egui::SidePanel::right("egui_workbench::activity_bar"),
@@ -715,7 +755,9 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
         if self.panel_area.inner.entries.is_empty() {
             self.panel_area.maximized = false;
         }
-        let panel_visible = self.panel_area.visible && !self.panel_area.inner.entries.is_empty();
+        let panel_visible = self.panel_area.visible
+            && !self.panel_area.inner.entries.is_empty()
+            && !self.reader_mode;
         // Maximised panel hides the editor area: render panel as
         // CentralPanel and skip the editor central panel below.
         if panel_visible && self.panel_area.maximized {
@@ -788,11 +830,22 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
     where
         Mode: Send + Sync,
     {
+        // Reader mode hides the primary side bar (render-time gate only —
+        // `bar.visible` is left as the user set it).
+        if self.reader_mode {
+            return None;
+        }
         let bar = &mut self.primary_side_bar;
         if !bar.visible || self.primary_panels.is_empty() {
             return None;
         }
-        let frame = Frame::side_top_panel(&ctx.style()).fill(theme.side_bar_bg);
+        // Zero the frame's HORIZONTAL inner margin (keep the small vertical one)
+        // so section headers — the accordion handles and their divider lines —
+        // run edge to edge; each section body re-insets its own contents
+        // (`render_section`).
+        let frame = Frame::side_top_panel(&ctx.style())
+            .fill(theme.side_bar_bg)
+            .inner_margin(egui::Margin::symmetric(0, 2));
         let panel = match bar.side {
             crate::side_bar::Side::Left => egui::SidePanel::left("egui_workbench::primary_side_bar"),
             crate::side_bar::Side::Right => {
@@ -841,11 +894,21 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
     where
         Mode: Send + Sync,
     {
+        // Reader mode hides the secondary side bar (render-time gate only).
+        if self.reader_mode {
+            return None;
+        }
         let bar = &mut self.secondary_side_bar;
         if !bar.visible || self.secondary_panels.is_empty() {
             return None;
         }
-        let frame = Frame::side_top_panel(&ctx.style()).fill(theme.side_bar_bg);
+        // Zero the frame's HORIZONTAL inner margin (keep the small vertical one)
+        // so section headers — the accordion handles and their divider lines —
+        // run edge to edge; each section body re-insets its own contents
+        // (`render_section`).
+        let frame = Frame::side_top_panel(&ctx.style())
+            .fill(theme.side_bar_bg)
+            .inner_margin(egui::Margin::symmetric(0, 2));
         let panel = match bar.side {
             crate::side_bar::Side::Left => {
                 egui::SidePanel::left("egui_workbench::secondary_side_bar")
@@ -967,6 +1030,9 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
             behavior,
             theme,
             egui::Id::new("egui_workbench::panel_tree_placeholder"),
+            // The panel area is hidden entirely in reader mode; its tab strip
+            // is never the reader target, so it always shows.
+            false,
         );
         if outcome.dirty {
             self.dirty = true;
@@ -988,11 +1054,13 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
             return;
         }
 
+        let hide_tab_strip = self.hide_tab_strip;
         let outcome = self.editor_area.drive_ui(
             ui,
             behavior,
             theme,
             egui::Id::new("egui_workbench::editor_tree_placeholder"),
+            hide_tab_strip,
         );
         if outcome.dirty {
             self.dirty = true;

@@ -278,6 +278,7 @@ impl<Tab: Document> EditorArea<Tab> {
         behavior: &mut B,
         theme: &Palette,
         placeholder_id: egui::Id,
+        hide_tab_strip: bool,
     ) -> DriveOutcome
     where
         Mode: Clone + Eq + Hash + 'static,
@@ -314,6 +315,7 @@ impl<Tab: Document> EditorArea<Tab> {
             pane_to_group,
             pending_focus: None,
             last_active_per_group: &mut self.last_active_per_group,
+            hide_tab_strip,
             _mode: PhantomData,
         };
         tree.ui(&mut adapter, ui);
@@ -508,6 +510,10 @@ where
     /// promotes this to `focused_group` post-frame so per-group commands
     /// (close-active, focus-next, etc.) target what the user just touched.
     pub pending_focus: Option<TileId>,
+    /// When true, the tab strip is suppressed: `tab_bar_height` collapses to
+    /// zero and `tab_ui` paints nothing, so the focused pane fills the group.
+    /// A render-time gate (reader mode) — the tabs themselves are untouched.
+    pub hide_tab_strip: bool,
     pub _mode: PhantomData<Mode>,
 }
 
@@ -584,6 +590,17 @@ where
         }
     }
 
+    fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
+        // Collapse the reserved tab-bar height to zero when the strip is
+        // hidden (reader mode); else the egui_tiles default. Paired with the
+        // zero-size `tab_ui` below so nothing paints into the strip.
+        if self.hide_tab_strip {
+            0.0
+        } else {
+            24.0
+        }
+    }
+
     fn tab_ui(
         &mut self,
         tiles: &mut Tiles<TabId>,
@@ -592,6 +609,13 @@ where
         tile_id: TileId,
         state: &TilesTabState,
     ) -> Response {
+        // Hidden tab strip (reader mode): paint no handle. `tab_bar_height`
+        // already collapsed the bar to zero height, so this just avoids
+        // drawing tabs clipped into the zero-height strip.
+        if self.hide_tab_strip {
+            return ui.allocate_response(Vec2::ZERO, Sense::hover());
+        }
+
         // Resolve the handle + flags before borrowing the painter.
         let (handle, tab_state, is_dirty, tooltip) = match tiles.get(tile_id) {
             Some(Tile::Pane(h)) => {
@@ -638,19 +662,25 @@ where
         if ui.is_rect_visible(tab_rect) && !state.is_being_dragged {
             let bg_color = self.tab_bg_color(ui.visuals(), tiles, tile_id, state);
             let stroke = self.tab_outline_stroke(ui.visuals(), tiles, tile_id, state);
-            ui.painter().rect(
-                tab_rect.shrink(0.5),
-                0.0,
-                bg_color,
-                stroke,
-                StrokeKind::Inside,
-            );
+            let r = tab_rect.shrink(0.5);
+            ui.painter().rect_filled(r, 0.0, bg_color);
             if state.active {
+                // The active tab connects to its content: bridge the tab strip's
+                // bottom separator under this tab with the tab's own background,
+                // then outline only the top / left / right edges (no bottom). A
+                // full `Inside` box would leave a thin bottom sliver the bridge
+                // can't fully cover. Inactive tabs keep the strip separator.
                 ui.painter().hline(
                     tab_rect.x_range(),
                     tab_rect.bottom(),
-                    Stroke::new(stroke.width + 1.0, bg_color),
+                    Stroke::new(stroke.width + 2.0, bg_color),
                 );
+                let bot = tab_rect.bottom();
+                ui.painter().line_segment([egui::pos2(r.left(), bot), r.left_top()], stroke);
+                ui.painter().line_segment([r.left_top(), r.right_top()], stroke);
+                ui.painter().line_segment([r.right_top(), egui::pos2(r.right(), bot)], stroke);
+            } else {
+                ui.painter().rect_stroke(r, 0.0, stroke, StrokeKind::Inside);
             }
 
             let text_color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);

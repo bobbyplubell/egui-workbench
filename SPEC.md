@@ -65,7 +65,7 @@ arrangement is persistable per workspace.
 
 2.1. The primary side bar is a **vertical accordion** of one or more activity **sections** (single-column). With one section open it looks identical to a plain single-activity side bar; additional sections stack below it.
 
-2.2. Each section has a **header**: a collapse twistie, the activity's title, and the host's per-activity action buttons. All headers render identically (no per-section focus highlight) so an added section reads as a peer, not a selected sub-item.
+2.2. Each section has a **header**: a collapse twistie, the activity's title, and the host's per-activity action buttons. All headers render identically (no per-section focus highlight) so an added section reads as a peer, not a selected sub-item. Every header draws a top divider line (full panel width), so stacked sections read as distinct views — and the topmost is delineated from whatever sits above the side bar (the global toolbar) rather than merging into it.
 
 2.3. **Panel menu.** Right-clicking a section header opens its menu: the host's per-activity actions, an "Add panel" submenu (activities not yet open), and "Close panel". (There is no discrete `+` or `…` button — the right-click menu is the single entry point.)
 
@@ -165,6 +165,18 @@ arrangement is persistable per workspace.
 7.5. The status bar's contents are entirely host-supplied; the crate provides the chrome.
 
 7.6. The status bar may be **hidden** (rare; mostly for zen mode).
+
+### 7b. Reader / focus mode
+
+7b.1. The workbench carries a single session-level `reader_mode` flag (`reader_mode()` / `set_reader_mode()` / `toggle_reader_mode()`), default off.
+
+7b.2. When on, `Workbench::ui` **suppresses every chrome region at render time** — status bar, activity bar, both side bars, and the panel area — leaving only the central editor area to fill the viewport.
+
+7b.3. The gate is **render-time only**: the `visible` booleans on the individual regions are never mutated, so the user's collapse choices are preserved across a toggle and layout persistence saves the true state.
+
+7b.4. The flag is **not persisted** and is not part of the layout document. Appearance beyond the chrome suppression (e.g. whether a host keeps its own top bar visible) is the host's concern.
+
+7b.5. A separate session-level `hide_tab_strip` flag (`set_hide_tab_strip()`), default off, suppresses the **editor-area tab strip** at render time: the editor behavior collapses `tab_bar_height` to zero and paints no tab handles, so the focused pane fills its group. Like `reader_mode` it is a render-time gate only — the tabs and tree are untouched, so the strip returns when the flag clears. Independent of `reader_mode`; the host drives it (typically `reader_mode && <host setting>`). The panel area's tab strip is unaffected.
 
 ### 8. Layout persistence
 
