@@ -45,27 +45,27 @@ arrangement is persistable per workspace.
 
 1.2. Each item in the strip represents an **activity** (an addressable view container the user can summon to the side bar).
 
-1.3. Clicking an item **switches** the primary side bar to that activity: it focuses the activity if it is already an open section (keeping the current arrangement), otherwise it **opens that activity in full** — replacing the entire stack with just that one section. Clicking the already-focused activity **hides** the side bar. This is VSCode's view-container switch behavior — a click never adds to or splits the existing arrangement; extra sections are built only via drag or the `+` menu (§2.6).
+1.3. Clicking an item **switches** the primary side bar to that activity: it focuses the activity if it is already an open section (keeping the current arrangement), otherwise it **opens that activity in full** — replacing the entire stack with just that one section. Clicking the already-focused activity **hides** the side bar. A click never adds to or splits the existing arrangement; extra sections are built only via drag or the panel menu (§2.3).
 
 1.4. The currently-active activity is rendered with an **accent indicator** (e.g., a colored bar on the leading edge of the item).
 
-1.5. Items are **draggable**. Releasing a drag **inside the strip** reorders the item within the strip; releasing it **outside the strip** (over the rest of the window) **adds that activity as a new section** in the primary side bar — VSCode's "drag a view into the sidebar". A cursor-following ghost previews the dragged item, and the side bar highlights as a drop target while a drag hovers it.
+1.5. Items are **draggable**. Releasing a drag **inside the strip** reorders the item within the strip; releasing it **outside the strip** (over the rest of the window) **adds that activity as a new section** in the primary side bar. A cursor-following ghost previews the dragged item, and the side bar highlights as a drop target while a drag hovers it.
 
 1.6. Items can be **right-clicked** to access per-item commands: Hide, Move to Other Side Bar, etc.
 
 1.7. Each item may carry a **badge** — a small number or dot — driven by host-supplied state (e.g., "5 problems", "1 unread").
 
-1.8. The activity bar itself may be hidden, moved to the right side, or moved to the top/bottom (top/bottom is a v1.1 stretch goal; v1.0 supports left and right).
+1.8. The activity bar itself may be hidden or moved to the right side (top/bottom is v1.1).
 
 1.9. **Right-clicking the strip** — an item or its empty area — opens a context menu listing **every available item as a checkbox**, checked when the item is currently shown. Toggling a checkbox shows or hides that item. This is the affordance that restores an item hidden via 1.6, so it stays reachable from the empty strip even when all items are hidden (per 14.3). Per-item right-click shows the checklist below the item-scoped `Hide` command and above the host's own entries.
 
-1.10. The set of hidden items and the user's item order are **persisted** (see §8) so visibility and ordering survive a restart.
+1.10. The set of hidden items and the user's item order are **persisted** (see §8).
 
 ### 2. Primary side bar
 
 2.1. The primary side bar is a **vertical accordion** of one or more activity **sections** (single-column). With one section open it looks identical to a plain single-activity side bar; additional sections stack below it.
 
-2.2. Each section has a **header**: a collapse twistie, the activity's title, and the host's per-activity action buttons. All headers render identically (no per-section focus highlight) so an added section reads as a peer, not a selected sub-item. Every header draws a top divider line (full panel width), so stacked sections read as distinct views — and the topmost is delineated from whatever sits above the side bar (the global toolbar) rather than merging into it.
+2.2. Each section has a **header**: a collapse twistie, the activity's title, and the host's per-activity action buttons. All headers render identically (no per-section focus highlight) so an added section reads as a peer. Every header draws a full-width top divider line, so stacked sections read as distinct views and the topmost is delineated from the global toolbar above the side bar.
 
 2.3. **Panel menu.** Right-clicking a section header opens its menu: the host's per-activity actions, an "Add panel" submenu (activities not yet open), and "Close panel". (There is no discrete `+` or `…` button — the right-click menu is the single entry point.)
 
@@ -83,7 +83,7 @@ arrangement is persistable per workspace.
 
 2.10. The bar can be **collapsed** entirely with a keyboard shortcut (`Ctrl+B` / `Cmd+B` by default) — the section set is preserved, only visibility changes.
 
-2.11. The bar's width is **persisted** across sessions. The host may also persist the section arrangement (open sections, collapse flags, height weights, focus, visibility) via the `SidePanelStack` accessors + `restore`, storing it wherever it keeps its own per-workspace settings.
+2.11. The bar's width is **persisted** across sessions. The host may also persist the section arrangement (open sections, collapse flags, height weights, focus, visibility) via the `SidePanelStack` accessors + `restore`.
 
 2.12. The bar's position can be **swapped** to the right edge — content unchanged, just rendered on the other side.
 
@@ -138,7 +138,7 @@ arrangement is persistable per workspace.
 
 5.7. Tab strips that overflow show **scroll affordances** (left/right chevrons) and may show a **dropdown** of all open tabs in the group.
 
-5.8. Dragging a tab outside the workbench window detaches it to a **floating window** (v1.1 stretch goal; v1.0 doesn't require it).
+5.8. Dragging a tab outside the workbench window detaches it to a **floating window** (v1.1).
 
 ### 6. Panel area
 
@@ -150,7 +150,7 @@ arrangement is persistable per workspace.
 
 6.4. The panel area's height is **resizable** and **persisted**.
 
-6.5. The panel area may be **moved** to top/right/bottom (v1.1 stretch; v1.0 supports bottom only).
+6.5. The panel area may be **moved** to top/right/bottom (v1.1).
 
 ### 7. Status bar
 
@@ -176,7 +176,7 @@ arrangement is persistable per workspace.
 
 7b.4. The flag is **not persisted** and is not part of the layout document. Appearance beyond the chrome suppression (e.g. whether a host keeps its own top bar visible) is the host's concern.
 
-7b.5. A separate session-level `hide_tab_strip` flag (`set_hide_tab_strip()`), default off, suppresses the **editor-area tab strip** at render time: the editor behavior collapses `tab_bar_height` to zero and paints no tab handles, so the focused pane fills its group. Like `reader_mode` it is a render-time gate only — the tabs and tree are untouched, so the strip returns when the flag clears. Independent of `reader_mode`; the host drives it (typically `reader_mode && <host setting>`). The panel area's tab strip is unaffected.
+7b.5. A separate session-level `hide_tab_strip` flag (`set_hide_tab_strip()`), default off, suppresses the **editor-area tab strip** at render time: the editor collapses `tab_bar_height` to zero and paints no tab handles, so the focused pane fills its group. A render-time gate only (per 7b.3) — the tabs and tree are untouched, so the strip returns when the flag clears. Independent of `reader_mode`; the host drives it (typically `reader_mode && <host setting>`). The panel area's tab strip is unaffected.
 
 ### 8. Layout persistence
 
@@ -245,14 +245,8 @@ arrangement is persistable per workspace.
 
 ## Out of scope for v1.0
 
-- Floating/detachable windows (v1.1 stretch).
-- Activity bar position other than left/right (v1.1).
-- Panel area position other than bottom (v1.1).
-- A built-in command palette UI (forever host concern).
-- A built-in keybinding system (forever host concern).
-- Built-in notifications / toasts (forever host concern).
-- A theme picker UI (host concern).
-- Built-in welcome page (host concern).
+- **Deferred to v1.1:** floating/detachable windows; activity bar position other than left/right; panel area position other than bottom.
+- **These stay host concerns:** command palette UI, keybinding system, notifications/toasts, theme picker UI, welcome page.
 
 ## Compatibility
 
@@ -267,6 +261,6 @@ arrangement is persistable per workspace.
 
 ## Success criteria for v0.1.0 release
 
-- API stays generic: nothing in the crate references a host app's types, domain concepts, or app-specific layout choices. Any egui app can adopt it (possibly with future extension points) without forking.
+- API stays generic: nothing in the crate references a host app's types, domain concepts, or app-specific layout choices — any egui app can adopt it without forking.
 - `cargo test` green, `cargo clippy` clean with the workspace lint set, `cargo doc` warning-free.
-- Demo binary `cargo run -p workbench-demo` launches and lets the user reproduce every requirement above.
+- Demo binary `cargo run -p workbench-demo` launches and reproduces every requirement above.
