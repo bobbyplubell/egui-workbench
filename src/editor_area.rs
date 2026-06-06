@@ -52,6 +52,22 @@ impl<Tab: Document> Default for EditorArea<Tab> {
     }
 }
 
+/// Tree-simplification policy shared by the live `egui_tiles` behavior and
+/// the post-frame normalization pass, so the two never drift. The
+/// `prune_single_child_*` flags collapse the redundant nesting a split/merge
+/// leaves behind; `all_panes_must_have_tabs` keeps a lone editor pane in a
+/// tab group; `join_nested_linear_containers` flattens stacked splits.
+pub(crate) fn workbench_simplification_options() -> SimplificationOptions {
+    SimplificationOptions {
+        prune_empty_tabs: true,
+        prune_empty_containers: true,
+        prune_single_child_tabs: true,
+        prune_single_child_containers: true,
+        all_panes_must_have_tabs: true,
+        join_nested_linear_containers: true,
+    }
+}
+
 impl<Tab: Document> EditorArea<Tab> {
     pub fn new() -> Self {
         Self::default()
@@ -287,6 +303,10 @@ impl<Tab: Document> EditorArea<Tab> {
         let placeholder = Tree::empty(placeholder_id);
         let mut tree = std::mem::replace(&mut self.tree, placeholder);
         let focused_group = self.focused_group;
+        // Snapshot each handle's group before egui_tiles touches the tree, so
+        // the post-frame normalization can regroup panes split off by a body
+        // drop with the siblings they had a moment ago.
+        let prev_group_of = tree_adapter::group_of_each_handle(&tree);
         // Build a `pane TileId → parent Tabs-container TileId` map for
         // the whole tree so `EditorBehavior::pane_ui` can resolve a
         // pane's owning group without a per-frame tree walk.
@@ -363,6 +383,18 @@ impl<Tab: Document> EditorArea<Tab> {
         for (group, child) in activations {
             if let Some(Tile::Container(Container::Tabs(tabs))) = tree.tiles.get_mut(group) {
                 tabs.set_active(child);
+            }
+        }
+
+        // After an edit, a body drop may have nested a split inside a tab
+        // group (egui_tiles leaves that for us). Finalize the post-drop tree
+        // the way the next frame's `Tree::ui` would, then lift any nested
+        // split up to the group's own level so it reads as a clean split
+        // rather than a duplicated, stacked tab group.
+        if outcome.dirty {
+            tree.simplify(&workbench_simplification_options());
+            if tree_adapter::normalize_tab_groups(&mut tree, &prev_group_of) {
+                tree.simplify(&workbench_simplification_options());
             }
         }
 
@@ -863,20 +895,11 @@ where
     }
 
     fn simplification_options(&self) -> SimplificationOptions {
-        SimplificationOptions {
-            prune_empty_tabs: true,
-            prune_empty_containers: true,
-            // Collapse redundant nesting that a split/merge can leave behind: a
-            // Tabs whose only child is another container, or a single-child
-            // Linear/Grid. Without this you can end up with a tabs container
-            // inside another and TWO stacked tab bars. `all_panes_must_have_tabs`
-            // still wins for a lone PANE (egui_tiles keeps that tab bar), so a
-            // normal single-editor group is unaffected.
-            prune_single_child_tabs: true,
-            prune_single_child_containers: true,
-            all_panes_must_have_tabs: true,
-            join_nested_linear_containers: true,
-        }
+        // egui_tiles can't collapse everything: a body drop nests a split
+        // inside a tab group (a Tabs with >1 child), which these options
+        // leave alone. `EditorArea::drive_ui` runs a follow-up
+        // `tree_adapter::normalize_tab_groups` pass to lift those out.
+        workbench_simplification_options()
     }
 
     fn on_edit(&mut self, _edit_action: EditAction) {

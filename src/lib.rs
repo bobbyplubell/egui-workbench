@@ -56,6 +56,7 @@ pub mod activity;
 pub mod activity_bar;
 pub mod behavior;
 pub mod editor_area;
+pub mod menu;
 pub mod panel_area;
 #[cfg(feature = "serde")]
 pub mod persistence;
