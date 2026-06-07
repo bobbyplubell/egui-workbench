@@ -37,6 +37,15 @@ pub struct EditorArea<Tab: Document> {
     /// reveals a new/just-selected tab without fighting manual scrolling
     /// on subsequent frames.
     pub(crate) last_active_per_group: HashMap<TileId, TabId>,
+    /// Handle the user explicitly clicked to activate this frame, if any.
+    /// Drained by the host (via [`EditorArea::take_user_activation`]) as a
+    /// discrete "the user picked this tab" event — the host's single channel
+    /// for learning about user-driven tab switches. Deliberately NOT inferred
+    /// by diffing the active handle across the frame: that diff also trips on
+    /// non-click active changes (async tab restore settling, a linked/driven
+    /// group repointing) and lets the host's active-tab state fight the push
+    /// from `set_active`. Only a genuine `tab_response.clicked()` sets this.
+    pub(crate) pending_user_activation: Option<TabId>,
     _marker: PhantomData<Tab>,
 }
 
@@ -47,6 +56,7 @@ impl<Tab: Document> Default for EditorArea<Tab> {
             entries: HashMap::new(),
             focused_group: None,
             last_active_per_group: HashMap::new(),
+            pending_user_activation: None,
             _marker: PhantomData,
         }
     }
@@ -83,8 +93,18 @@ impl<Tab: Document> EditorArea<Tab> {
             entries: HashMap::new(),
             focused_group: None,
             last_active_per_group: HashMap::new(),
+            pending_user_activation: None,
             _marker: PhantomData,
         }
+    }
+
+    /// Take the tab the user clicked to activate this frame, clearing it.
+    /// The host calls this once per frame after `ui()` to react to genuine
+    /// user tab switches (record nav history, sync its own active-tab state)
+    /// without diffing derived active state. Returns the workbench handle of
+    /// the clicked tab; `None` when the user didn't click a tab this frame.
+    pub fn take_user_activation(&mut self) -> Option<TabId> {
+        self.pending_user_activation.take()
     }
 
     /// Number of currently open tabs (across all groups).
@@ -335,6 +355,7 @@ impl<Tab: Document> EditorArea<Tab> {
             pane_to_group,
             pending_focus: None,
             last_active_per_group: &mut self.last_active_per_group,
+            pending_user_activation: None,
             hide_tab_strip,
             _mode: PhantomData,
         };
@@ -373,11 +394,13 @@ impl<Tab: Document> EditorArea<Tab> {
         let pending_closes = std::mem::take(&mut adapter.pending_closes);
         let activations = std::mem::take(&mut adapter.pending_tab_activations);
         let pending_focus = adapter.pending_focus.take();
+        let pending_user_activation = adapter.pending_user_activation.take();
         drop(adapter);
 
         if let Some(group) = pending_focus {
             self.focused_group = Some(group);
         }
+        self.pending_user_activation = pending_user_activation;
 
         // Apply "all tabs" dropdown activations from the frame.
         for (group, child) in activations {
@@ -542,6 +565,9 @@ where
     /// promotes this to `focused_group` post-frame so per-group commands
     /// (close-active, focus-next, etc.) target what the user just touched.
     pub pending_focus: Option<TileId>,
+    /// Tab handle the user clicked to activate this frame, if any. Drained
+    /// post-frame into [`EditorArea::pending_user_activation`].
+    pub pending_user_activation: Option<TabId>,
     /// When true, the tab strip is suppressed: `tab_bar_height` collapses to
     /// zero and `tab_ui` paints nothing, so the focused pane fills the group.
     /// A render-time gate (reader mode) — the tabs themselves are untouched.
@@ -793,6 +819,15 @@ where
             && let Some(parent) = tiles.parent_of(tile_id)
         {
             self.pending_focus = Some(parent);
+        }
+
+        // Record a genuine click-to-activate as a discrete event for the host.
+        // egui_tiles itself makes the clicked pane active (the visible tab
+        // switches this frame); this just lets the host learn *that the user
+        // chose it* without inferring it from an active-handle diff. Drag and
+        // close don't count as activation.
+        if tab_response.clicked() {
+            self.pending_user_activation = Some(handle);
         }
 
         // Preview promotion on double-click.

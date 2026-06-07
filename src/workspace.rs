@@ -372,14 +372,25 @@ impl<Tab: Document, Mode: Clone + Eq + Hash + 'static> Workbench<Tab, Mode> {
     }
 
     /// Handle of the active tab inside the focused editor group, if any.
-    /// Hosts use this to detect "user clicked a tab in the strip" by
-    /// snapshotting before [`Self::ui`] and comparing after.
+    /// This is *derived* render state (focused group × that group's active
+    /// pane). Don't infer "user clicked a tab" by diffing it across a frame —
+    /// it also moves for non-click reasons (tabs opened/closed mid-frame, a
+    /// linked/driven group repointing). Use [`Self::take_user_activated`] for
+    /// the genuine click event instead.
     pub fn active_handle(&self) -> Option<TabId> {
         let group = self.editor_area.focused_group()?;
         crate::internal::tree_adapter::active_handle_in_group(
             &self.editor_area.tree,
             group.0,
         )
+    }
+
+    /// The tab the user clicked to activate in the editor strip this frame,
+    /// if any, clearing it. This is the host's single, unambiguous channel for
+    /// "the user switched tabs" — call once after [`Self::ui`]. Returns the
+    /// clicked tab's handle, or `None` when no tab was clicked this frame.
+    pub fn take_user_activated(&mut self) -> Option<TabId> {
+        self.editor_area.take_user_activation()
     }
 
     /// Handle of the active tab inside a specific editor `group`, if the
