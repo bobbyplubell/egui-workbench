@@ -145,7 +145,7 @@ impl eframe::App for DemoApp {
                 if ui.button("Load layout").clicked() {
                     match std::fs::read_to_string(LAYOUT_PATH) {
                         Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
-                            Ok(v) => match egui_workbench::persistence::migrate(v) {
+                            Ok(v) => match egui_workbench::persistence::parse_layout(v) {
                                 Some(layout) => match self.workbench.apply_layout(layout) {
                                     Ok(()) => self.status = "Loaded layout".into(),
                                     Err(e) => self.status = format!("Apply failed: {e}"),

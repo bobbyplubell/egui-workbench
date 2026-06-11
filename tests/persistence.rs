@@ -12,7 +12,7 @@ use egui_workbench::workspace::Workbench;
 
 use egui_workbench::behavior::Host;
 
-use egui_workbench::persistence::migrate;
+use egui_workbench::persistence::parse_layout;
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 struct PTab {
     title: String,
@@ -56,7 +56,7 @@ fn layout_round_trip_preserves_tabs() {
     let layout = wb.layout();
     let json = serde_json::to_string(&layout).expect("serialise");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse");
-    let layout2 = migrate(parsed).expect("migrate v1");
+    let layout2 = parse_layout(parsed).expect("parse v1");
 
     let mut wb2 = Workbench::<PTab, PMode>::new();
     wb2.apply_layout(layout2).expect("apply layout");
@@ -87,7 +87,7 @@ fn hidden_and_order_round_trip() {
 
     let json = serde_json::to_string(&wb.layout()).expect("serialise");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse");
-    let layout2 = migrate(parsed).expect("migrate v1");
+    let layout2 = parse_layout(parsed).expect("parse v1");
 
     let mut wb2 = Workbench::<PTab, PMode>::new();
     wb2.apply_layout(layout2).expect("apply layout");
@@ -99,15 +99,15 @@ fn hidden_and_order_round_trip() {
 
 #[test]
 fn layout_without_visibility_fields_defaults_empty() {
-    // A pre-existing layout JSON omits the new fields; they must default
-    // rather than fail the migrate.
+    // A layout JSON omitting the optional visibility fields must default
+    // rather than fail the parse.
     let mut wb = Workbench::<PTab, PMode>::new();
     let mut value = serde_json::to_value(wb.layout()).expect("serialise");
     let obj = value.as_object_mut().expect("object");
     obj.remove("hidden_activities");
     obj.remove("activity_order");
 
-    let layout = migrate(value).expect("migrate without visibility fields");
+    let layout = parse_layout(value).expect("parse without visibility fields");
     wb.apply_layout(layout).expect("apply layout");
     assert!(wb.activity_bar.hidden().is_empty());
     assert!(wb.activity_bar.order().is_empty());
@@ -116,11 +116,11 @@ fn layout_without_visibility_fields_defaults_empty() {
 #[test]
 fn unknown_schema_version_returns_none() {
     let v = serde_json::json!({ "version": 999 });
-    assert!(migrate(v).is_none());
+    assert!(parse_layout(v).is_none());
 }
 
 #[test]
 fn missing_version_returns_none() {
     let v = serde_json::json!({ "primary_side": "Left" });
-    assert!(migrate(v).is_none());
+    assert!(parse_layout(v).is_none());
 }

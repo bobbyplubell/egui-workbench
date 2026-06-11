@@ -7,9 +7,10 @@
 //! self-describing enough to inspect or hand-edit.
 //!
 //! Versioning policy: the schema bumps independently from the crate
-//! version. v1 is the initial format; future versions add fields and
-//! ship a migration arm in [`migrate`]. Migrations are append-only —
-//! they never delete data.
+//! version. v1 is the current format; a snapshot with any other version
+//! is rejected by [`parse_layout`] and the host starts from the default
+//! layout — there is no migration path (pre-release policy: reset on
+//! mismatch, never migrate).
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -213,10 +214,11 @@ impl std::fmt::Display for LayoutError {
 
 impl std::error::Error for LayoutError {}
 
-/// Schema migration entry point. Returns `None` for unknown versions
-/// (logged as a warning) rather than panicking, so a stale on-disk
-/// layout cannot crash the host.
-pub fn migrate(value: serde_json::Value) -> Option<WorkbenchLayout> {
+/// Parse a persisted layout snapshot. Returns `None` for any version
+/// other than the current one (logged as a warning) rather than
+/// panicking, so a stale on-disk layout cannot crash the host — the
+/// caller falls back to the default layout.
+pub fn parse_layout(value: serde_json::Value) -> Option<WorkbenchLayout> {
     let version = value
         .get("version")
         .and_then(serde_json::Value::as_u64)
